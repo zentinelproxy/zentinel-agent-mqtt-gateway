@@ -1,0 +1,77 @@
+[package]
+name = "sentinel-agent-mqtt-gateway"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Sentinel Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/raskell-io/sentinel-agent-mqtt-gateway"
+homepage = "https://sentinel.raskell.io"
+documentation = "https://sentinel.raskell.io/docs/agents/mqtt-gateway"
+description = "MQTT Gateway agent for Sentinel proxy - IoT protocol security with ACLs, auth, and payload inspection"
+keywords = ["sentinel", "mqtt", "iot", "security", "proxy", "agent"]
+categories = ["network-programming"]
+readme = "README.md"
+
+[[bin]]
+name = "sentinel-mqtt-agent"
+path = "src/main.rs"
+
+[lib]
+name = "sentinel_agent_mqtt_gateway"
+path = "src/lib.rs"
+
+[dependencies]
+# Sentinel protocol
+sentinel-agent-protocol = { path = "../sentinel/crates/agent-protocol" }
+
+# MQTT parsing
+mqttrs = "0.4"
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Rate limiting
+governor = "0.6"
+nonzero_ext = "0.3"
+
+# Data structures
+dashmap = "6.1"
+parking_lot = "0.12"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Authentication
+jsonwebtoken = "9"
+bcrypt = "0.15"
+
+# Payload inspection
+regex = "1"
+jsonschema = "0.18"
+
+# Base64 for payload decoding
+base64 = "0.22"
+
+# Command line
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Network
+ipnet = "2.9"
+
+[dev-dependencies]
+tempfile = "3.12"
+tokio-test = "0.4"
