@@ -42,6 +42,7 @@ impl InspectionResult {
 }
 
 /// Payload inspector
+#[derive(Default)]
 pub struct PayloadInspector {
     pattern_inspector: PatternInspector,
     schema_validator: Option<SchemaValidator>,
@@ -158,13 +159,3 @@ impl PayloadInspector {
     }
 }
 
-impl Default for PayloadInspector {
-    fn default() -> Self {
-        Self {
-            pattern_inspector: PatternInspector::default(),
-            schema_validator: None,
-            config: InspectionConfig::default(),
-            topic_matcher: TopicMatcher::new(),
-        }
-    }
-}

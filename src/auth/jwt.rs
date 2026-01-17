@@ -40,6 +40,7 @@ pub enum StringOrVec {
 }
 
 impl StringOrVec {
+    #[allow(dead_code)]
     pub fn contains(&self, s: &str) -> bool {
         match self {
             Self::String(v) => v == s,

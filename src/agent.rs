@@ -1,6 +1,6 @@
 //! MQTT Gateway Agent implementation
 //!
-//! Implements the AgentHandler trait to process MQTT packets from WebSocket frames.
+//! Implements the AgentHandlerV2 trait to process MQTT packets from WebSocket frames.
 
 use crate::acl::{AclEvaluator, AclRequest};
 use crate::auth::Authenticator;
@@ -16,9 +16,14 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use sentinel_agent_protocol::{
-    AgentHandler, AgentResponse, AuditMetadata, ConfigureEvent, RequestHeadersEvent,
+    AgentHandler, AgentResponse, AuditMetadata, ConfigureEvent, EventType, RequestHeadersEvent,
     WebSocketFrameEvent,
 };
+use sentinel_agent_protocol::v2::{
+    AgentCapabilities, AgentFeatures, AgentHandlerV2, AgentLimits, DrainReason, HealthConfig,
+    HealthStatus, MetricsReport, ShutdownReason,
+};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -40,6 +45,20 @@ pub struct MqttGatewayAgent {
     retained_controller: Arc<RetainedController>,
     /// Connection contexts (keyed by correlation_id)
     connections: DashMap<String, ConnectionContext>,
+    /// Metrics: total requests processed
+    requests_total: AtomicU64,
+    /// Metrics: total requests blocked
+    requests_blocked: AtomicU64,
+    /// Metrics: total authentication failures
+    auth_failures: AtomicU64,
+    /// Metrics: total ACL denials
+    acl_denials: AtomicU64,
+    /// Metrics: total rate limit hits
+    rate_limit_hits: AtomicU64,
+    /// Metrics: total inspection blocks
+    inspection_blocks: AtomicU64,
+    /// Configuration version
+    config_version: Arc<RwLock<Option<String>>>,
 }
 
 impl MqttGatewayAgent {
@@ -67,6 +86,13 @@ impl MqttGatewayAgent {
             qos_enforcer: Arc::new(qos_enforcer),
             retained_controller: Arc::new(retained_controller),
             connections: DashMap::new(),
+            requests_total: AtomicU64::new(0),
+            requests_blocked: AtomicU64::new(0),
+            auth_failures: AtomicU64::new(0),
+            acl_denials: AtomicU64::new(0),
+            rate_limit_hits: AtomicU64::new(0),
+            inspection_blocks: AtomicU64::new(0),
+            config_version: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -151,6 +177,8 @@ impl MqttGatewayAgent {
                 reason = ?auth_result.reason,
                 "Authentication failed"
             );
+            self.auth_failures.fetch_add(1, Ordering::Relaxed);
+            self.requests_blocked.fetch_add(1, Ordering::Relaxed);
             return self.close_connection(
                 "auth-failed",
                 auth_result.reason.as_deref().unwrap_or("Authentication failed"),
@@ -215,6 +243,8 @@ impl MqttGatewayAgent {
                 rule = ?acl_result.rule_name,
                 "PUBLISH denied by ACL"
             );
+            self.acl_denials.fetch_add(1, Ordering::Relaxed);
+            self.requests_blocked.fetch_add(1, Ordering::Relaxed);
             return self.drop_response("acl-denied", &acl_result.reason);
         }
 
@@ -231,6 +261,8 @@ impl MqttGatewayAgent {
                 limit = ?rate_result.exceeded_limit,
                 "PUBLISH rate limited"
             );
+            self.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
+            self.requests_blocked.fetch_add(1, Ordering::Relaxed);
             return self.drop_response(
                 "rate-limited",
                 &format!("Rate limit exceeded: {:?}", rate_result.exceeded_limit),
@@ -282,6 +314,8 @@ impl MqttGatewayAgent {
                 patterns = ?patterns,
                 "PUBLISH blocked by inspection"
             );
+            self.inspection_blocks.fetch_add(1, Ordering::Relaxed);
+            self.requests_blocked.fetch_add(1, Ordering::Relaxed);
             return self.drop_response(
                 "inspection-blocked",
                 &format!("Malicious pattern detected: {:?}", patterns),
@@ -328,6 +362,8 @@ impl MqttGatewayAgent {
                     rule = ?acl_result.rule_name,
                     "SUBSCRIBE denied by ACL"
                 );
+                self.acl_denials.fetch_add(1, Ordering::Relaxed);
+                self.requests_blocked.fetch_add(1, Ordering::Relaxed);
                 return self.drop_response("acl-denied", &acl_result.reason);
             }
         }
@@ -429,9 +465,200 @@ impl Default for MqttGatewayAgent {
 }
 
 #[async_trait::async_trait]
+impl AgentHandlerV2 for MqttGatewayAgent {
+    /// Return agent capabilities for v2 protocol negotiation
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities {
+            protocol_version: 2,
+            agent_id: "mqtt-gateway".to_string(),
+            name: "MQTT Gateway Agent".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_events: vec![
+                EventType::Configure,
+                EventType::RequestHeaders,
+                EventType::WebSocketFrame,
+            ],
+            features: AgentFeatures {
+                streaming_body: false,
+                websocket: true,
+                guardrails: false,
+                config_push: true,
+                metrics_export: true,
+                concurrent_requests: 100,
+                cancellation: true,
+                flow_control: false,
+                health_reporting: true,
+            },
+            limits: AgentLimits {
+                max_body_size: 10 * 1024 * 1024, // 10MB
+                max_concurrency: 100,
+                preferred_chunk_size: 64 * 1024, // 64KB
+                max_memory: None,
+                max_processing_time_ms: Some(5000),
+            },
+            health: HealthConfig {
+                report_interval_ms: 10_000,
+                include_load_metrics: true,
+                include_resource_metrics: false,
+            },
+        }
+    }
+
+    /// Handle configuration updates from the proxy
+    async fn on_configure(&self, config: serde_json::Value, version: Option<String>) -> bool {
+        info!(version = ?version, "Received configuration update");
+
+        match serde_json::from_value::<MqttGatewayConfig>(config) {
+            Ok(new_config) => {
+                if let Err(e) = self.reconfigure(new_config) {
+                    warn!(error = %e, "Failed to apply configuration");
+                    return false;
+                }
+                // Store the version
+                if let Some(v) = version {
+                    *self.config_version.write() = Some(v);
+                }
+                info!("Configuration applied successfully");
+                true
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to parse configuration");
+                false
+            }
+        }
+    }
+
+    async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
+        // We only handle WebSocket frames
+        AgentResponse::default_allow()
+    }
+
+    async fn on_websocket_frame(&self, event: WebSocketFrameEvent) -> AgentResponse {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+
+        // Only inspect binary frames (MQTT over WebSocket)
+        if event.opcode != "binary" {
+            return AgentResponse::websocket_allow();
+        }
+
+        // Only inspect client-to-server frames
+        if !event.client_to_server {
+            return AgentResponse::websocket_allow();
+        }
+
+        // Decode base64 payload
+        let data = match BASE64.decode(&event.data) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(error = %e, "Failed to decode WebSocket frame data");
+                return AgentResponse::websocket_allow();
+            }
+        };
+
+        // Log if configured
+        if self.config.read().general.log_packets {
+            debug!(
+                correlation_id = %event.correlation_id,
+                frame_index = event.frame_index,
+                size = data.len(),
+                "Processing MQTT frame"
+            );
+        }
+
+        // Process the MQTT packet
+        self.process_mqtt_packet(&event.correlation_id, &event.client_ip, &data)
+    }
+
+    /// Return current health status
+    fn health_status(&self) -> HealthStatus {
+        let connections = self.connections.len() as u32;
+        let requests = self.requests_total.load(Ordering::Relaxed);
+        let blocked = self.requests_blocked.load(Ordering::Relaxed);
+
+        let mut status = HealthStatus::healthy("mqtt-gateway");
+        status.load = Some(sentinel_agent_protocol::v2::LoadMetrics {
+            in_flight: connections,
+            queue_depth: 0,
+            avg_latency_ms: 0.0,
+            p50_latency_ms: 0.0,
+            p95_latency_ms: 0.0,
+            p99_latency_ms: 0.0,
+            requests_processed: requests,
+            requests_rejected: blocked,
+            requests_timed_out: 0,
+        });
+        status
+    }
+
+    /// Return metrics report for export
+    fn metrics_report(&self) -> Option<MetricsReport> {
+        use sentinel_agent_protocol::v2::{CounterMetric, GaugeMetric};
+
+        let mut report = MetricsReport::new("mqtt-gateway", 10_000);
+
+        report.counters.push(CounterMetric::new(
+            "mqtt_gateway_requests_total",
+            self.requests_total.load(Ordering::Relaxed),
+        ));
+        report.counters.push(CounterMetric::new(
+            "mqtt_gateway_requests_blocked_total",
+            self.requests_blocked.load(Ordering::Relaxed),
+        ));
+        report.counters.push(CounterMetric::new(
+            "mqtt_gateway_auth_failures_total",
+            self.auth_failures.load(Ordering::Relaxed),
+        ));
+        report.counters.push(CounterMetric::new(
+            "mqtt_gateway_acl_denials_total",
+            self.acl_denials.load(Ordering::Relaxed),
+        ));
+        report.counters.push(CounterMetric::new(
+            "mqtt_gateway_rate_limit_hits_total",
+            self.rate_limit_hits.load(Ordering::Relaxed),
+        ));
+        report.counters.push(CounterMetric::new(
+            "mqtt_gateway_inspection_blocks_total",
+            self.inspection_blocks.load(Ordering::Relaxed),
+        ));
+        report.gauges.push(GaugeMetric::new(
+            "mqtt_gateway_active_connections",
+            self.connections.len() as f64,
+        ));
+
+        Some(report)
+    }
+
+    /// Handle shutdown request from proxy
+    async fn on_shutdown(&self, reason: ShutdownReason, grace_period_ms: u64) {
+        info!(
+            reason = ?reason,
+            grace_period_ms = grace_period_ms,
+            "Received shutdown request"
+        );
+        // Clear connection contexts on shutdown
+        self.connections.clear();
+    }
+
+    /// Handle drain request from proxy
+    async fn on_drain(&self, duration_ms: u64, reason: DrainReason) {
+        info!(
+            duration_ms = duration_ms,
+            reason = ?reason,
+            "Received drain request"
+        );
+        // In drain mode, we continue processing existing connections
+        // but the proxy will stop sending new ones
+    }
+}
+
+/// v1 AgentHandler implementation for backward compatibility with UDS transport.
+///
+/// This allows the agent to work with the legacy v1 protocol over Unix sockets,
+/// while the AgentHandlerV2 implementation provides full v2 protocol support for gRPC.
+#[async_trait::async_trait]
 impl AgentHandler for MqttGatewayAgent {
     async fn on_configure(&self, event: ConfigureEvent) -> AgentResponse {
-        info!("Received configuration");
+        info!("Received configuration (v1 protocol)");
 
         match serde_json::from_value::<MqttGatewayConfig>(event.config) {
             Ok(config) => {
@@ -455,6 +682,8 @@ impl AgentHandler for MqttGatewayAgent {
     }
 
     async fn on_websocket_frame(&self, event: WebSocketFrameEvent) -> AgentResponse {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+
         // Only inspect binary frames (MQTT over WebSocket)
         if event.opcode != "binary" {
             return AgentResponse::websocket_allow();

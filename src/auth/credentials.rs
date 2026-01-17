@@ -142,11 +142,7 @@ fn load_credentials_file(path: &Path) -> Result<HashMap<String, UserEntry>> {
     } else {
         // Assume YAML
         serde_json::from_str(&contents)
-            .or_else(|_| {
-                // If JSON fails, content might be YAML-like but we only have serde_json
-                // In production, you'd use serde_yaml here
-                Err(anyhow::anyhow!("YAML parsing requires serde_yaml"))
-            })
+            .map_err(|_| anyhow::anyhow!("YAML parsing requires serde_yaml"))
             .with_context(|| "Failed to parse credentials file")?
     };
 
@@ -154,6 +150,7 @@ fn load_credentials_file(path: &Path) -> Result<HashMap<String, UserEntry>> {
 }
 
 /// Hash a password for storage
+#[allow(dead_code)]
 pub fn hash_password(password: &str) -> Result<String> {
     bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .context("Failed to hash password")

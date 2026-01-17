@@ -71,8 +71,10 @@ pub trait AuthenticatorProvider: Send + Sync {
 }
 
 /// Multi-provider authenticator
+#[derive(Default)]
 pub struct Authenticator {
     providers: Vec<Arc<dyn AuthenticatorProvider>>,
+    #[allow(clippy::derivable_impls)]
     config: AuthConfig,
 }
 
@@ -204,11 +206,3 @@ impl Authenticator {
     }
 }
 
-impl Default for Authenticator {
-    fn default() -> Self {
-        Self {
-            providers: Vec::new(),
-            config: AuthConfig::default(),
-        }
-    }
-}

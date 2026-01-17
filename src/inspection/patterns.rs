@@ -33,6 +33,7 @@ struct CompiledPattern {
 }
 
 /// Pattern-based payload inspector
+#[derive(Default)]
 pub struct PatternInspector {
     patterns: Vec<CompiledPattern>,
 }
@@ -146,11 +147,6 @@ impl PatternInspector {
     }
 }
 
-impl Default for PatternInspector {
-    fn default() -> Self {
-        Self { patterns: Vec::new() }
-    }
-}
 
 // SQL Injection patterns (simplified from WAF agent)
 const SQL_INJECTION_PATTERNS: &[(&str, &str)] = &[

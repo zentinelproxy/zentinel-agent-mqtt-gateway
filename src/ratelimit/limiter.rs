@@ -67,7 +67,7 @@ pub struct RateLimiter {
 impl RateLimiter {
     /// Create a new rate limiter from configuration
     pub fn new(config: &RateLimitConfig) -> Self {
-        let global_limiter = config.global.as_ref().map(|limit| create_limiter_pair(limit));
+        let global_limiter = config.global.as_ref().map(create_limiter_pair);
 
         Self {
             config: Arc::new(RwLock::new(config.clone())),
@@ -144,7 +144,7 @@ impl RateLimiter {
         *self.config.write() = config.clone();
 
         // Update global limiter
-        let new_global = config.global.as_ref().map(|limit| create_limiter_pair(limit));
+        let new_global = config.global.as_ref().map(create_limiter_pair);
         *self.global_limiter.write() = new_global;
 
         // Clear per-client limiters (they'll be recreated on demand)

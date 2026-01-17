@@ -96,10 +96,8 @@ impl TopicMatcher {
             }
 
             // # must be last level and alone
-            if level.contains('#') {
-                if *level != "#" || i != levels.len() - 1 {
-                    return false;
-                }
+            if level.contains('#') && (*level != "#" || i != levels.len() - 1) {
+                return false;
             }
 
             // + must be alone in its level
