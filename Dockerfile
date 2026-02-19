@@ -10,7 +10,7 @@
 ################################################################################
 FROM gcr.io/distroless/cc-debian12:nonroot AS prebuilt
 
-COPY zentinel-mqtt-agent /zentinel-mqtt-agent
+COPY zentinel-mqtt-gateway-agent /zentinel-mqtt-gateway-agent
 
 LABEL org.opencontainers.image.title="Zentinel MQTT Gateway Agent" \
       org.opencontainers.image.description="Zentinel MQTT Gateway Agent for Zentinel reverse proxy" \
@@ -22,4 +22,4 @@ ENV RUST_LOG=info,zentinel_mqtt_agent=debug \
 
 USER nonroot:nonroot
 
-ENTRYPOINT ["/zentinel-mqtt-agent"]
+ENTRYPOINT ["/zentinel-mqtt-gateway-agent"]

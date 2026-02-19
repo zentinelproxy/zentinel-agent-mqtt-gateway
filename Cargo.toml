@@ -14,7 +14,7 @@ categories = ["network-programming"]
 readme = "README.md"
 
 [[bin]]
-name = "zentinel-mqtt-agent"
+name = "zentinel-mqtt-gateway-agent"
 path = "src/main.rs"
 
 [lib]

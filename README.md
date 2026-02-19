@@ -33,15 +33,15 @@ cargo build --release
 
 ```bash
 # Run with defaults
-zentinel-mqtt-agent --socket /tmp/zentinel-mqtt.sock
+zentinel-mqtt-gateway-agent --socket /tmp/zentinel-mqtt.sock
 
 # With configuration file
-zentinel-mqtt-agent \
+zentinel-mqtt-gateway-agent \
   --socket /tmp/zentinel-mqtt.sock \
   --config /etc/zentinel/mqtt-gateway.json
 
 # With JSON logging
-zentinel-mqtt-agent \
+zentinel-mqtt-gateway-agent \
   --socket /tmp/zentinel-mqtt.sock \
   --json-logs \
   --log-level debug
@@ -51,7 +51,7 @@ zentinel-mqtt-agent \
 
 | Option | Env Var | Description | Default |
 |--------|---------|-------------|---------|
-| `--socket` | `AGENT_SOCKET` | Unix socket path | `/tmp/zentinel-mqtt-agent.sock` |
+| `--socket` | `AGENT_SOCKET` | Unix socket path | `/tmp/zentinel-mqtt-gateway-agent.sock` |
 | `--grpc-address` | `AGENT_GRPC_ADDRESS` | gRPC listen address | - |
 | `--config` | `MQTT_CONFIG` | Configuration file path | - |
 | `--log-level` | `MQTT_LOG_LEVEL` | Log level (trace, debug, info, warn, error) | `info` |
