@@ -145,10 +145,8 @@ Standard MQTT wildcards:
 agents {
     agent "mqtt-gateway" {
         type "custom"
-        transport "unix_socket" {
-            path "/tmp/zentinel-mqtt.sock"
-        }
-        events ["websocket_frame"]
+        unix-socket "/tmp/zentinel-mqtt.sock"
+        events "websocket_frame"
         timeout-ms 100
         failure-mode "closed"
     }
@@ -160,7 +158,7 @@ routes {
         websocket enabled {
             max-frame-size 65536
         }
-        agents ["mqtt-gateway"]
+        agents "mqtt-gateway"
         upstream "mqtt-broker"
     }
 }
