@@ -16,8 +16,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use zentinel_agent_protocol::{
-    AgentHandler, AgentResponse, AuditMetadata, ConfigureEvent, EventType, RequestHeadersEvent,
-    WebSocketFrameEvent,
+    AgentResponse, AuditMetadata, EventType, RequestHeadersEvent, WebSocketFrameEvent,
 };
 use zentinel_agent_protocol::v2::{
     AgentCapabilities, AgentFeatures, AgentHandlerV2, AgentLimits, DrainReason, HealthConfig,
@@ -651,69 +650,3 @@ impl AgentHandlerV2 for MqttGatewayAgent {
     }
 }
 
-/// v1 AgentHandler implementation for backward compatibility with UDS transport.
-///
-/// This allows the agent to work with the legacy v1 protocol over Unix sockets,
-/// while the AgentHandlerV2 implementation provides full v2 protocol support for gRPC.
-#[async_trait::async_trait]
-impl AgentHandler for MqttGatewayAgent {
-    async fn on_configure(&self, event: ConfigureEvent) -> AgentResponse {
-        info!("Received configuration (v1 protocol)");
-
-        match serde_json::from_value::<MqttGatewayConfig>(event.config) {
-            Ok(config) => {
-                if let Err(e) = self.reconfigure(config) {
-                    warn!(error = %e, "Failed to apply configuration");
-                    return AgentResponse::default_allow();
-                }
-                info!("Configuration applied successfully");
-                AgentResponse::default_allow()
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to parse configuration");
-                AgentResponse::default_allow()
-            }
-        }
-    }
-
-    async fn on_request_headers(&self, _event: RequestHeadersEvent) -> AgentResponse {
-        // We only handle WebSocket frames
-        AgentResponse::default_allow()
-    }
-
-    async fn on_websocket_frame(&self, event: WebSocketFrameEvent) -> AgentResponse {
-        self.requests_total.fetch_add(1, Ordering::Relaxed);
-
-        // Only inspect binary frames (MQTT over WebSocket)
-        if event.opcode != "binary" {
-            return AgentResponse::websocket_allow();
-        }
-
-        // Only inspect client-to-server frames
-        if !event.client_to_server {
-            return AgentResponse::websocket_allow();
-        }
-
-        // Decode base64 payload
-        let data = match BASE64.decode(&event.data) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(error = %e, "Failed to decode WebSocket frame data");
-                return AgentResponse::websocket_allow();
-            }
-        };
-
-        // Log if configured
-        if self.config.read().general.log_packets {
-            debug!(
-                correlation_id = %event.correlation_id,
-                frame_index = event.frame_index,
-                size = data.len(),
-                "Processing MQTT frame"
-            );
-        }
-
-        // Process the MQTT packet
-        self.process_mqtt_packet(&event.correlation_id, &event.client_ip, &data)
-    }
-}

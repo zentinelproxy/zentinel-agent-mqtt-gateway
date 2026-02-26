@@ -15,6 +15,18 @@ IoT protocol security agent for [Zentinel](https://github.com/zentinelproxy/zent
 
 ## Installation
 
+### Using Bundle (Recommended)
+
+```bash
+# Install just this agent
+zentinel bundle install mqtt-gateway
+
+# Or install all bundled agents
+zentinel bundle install
+```
+
+The bundle command downloads the correct binary for your platform and places it in the standard location. See the [bundle documentation](https://zentinelproxy.io/docs/deployment/bundle/) for details.
+
 ### Using Cargo
 
 ```bash
@@ -155,7 +167,7 @@ agents {
 routes {
     route "mqtt" {
         matches { path-prefix "/mqtt" }
-        websocket enabled {
+        websocket #true {
             max-frame-size 65536
         }
         agents "mqtt-gateway"

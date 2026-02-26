@@ -12,7 +12,7 @@
 //! # Architecture
 //!
 //! The agent processes MQTT packets from WebSocket binary frames. It implements
-//! the Zentinel `AgentHandler` trait and receives `WebSocketFrameEvent` for each
+//! the Zentinel `AgentHandlerV2` trait and receives `WebSocketFrameEvent` for each
 //! MQTT packet transmitted over WebSocket.
 //!
 //! # Example Configuration

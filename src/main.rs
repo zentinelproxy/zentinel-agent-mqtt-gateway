@@ -2,13 +2,12 @@
 //!
 //! Standalone agent binary for the Zentinel proxy.
 //!
-//! Supports both v2 UDS and gRPC transports.
+//! Supports both UDS and gRPC transports (v2 protocol).
 
 use anyhow::Result;
 use clap::Parser;
 use zentinel_agent_mqtt_gateway::{MqttGatewayAgent, MqttGatewayConfig};
-use zentinel_agent_protocol::v2::GrpcAgentServerV2;
-use zentinel_agent_protocol::AgentServer;
+use zentinel_agent_protocol::v2::{GrpcAgentServerV2, UdsAgentServerV2};
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -92,16 +91,16 @@ async fn main() -> Result<()> {
         let server = GrpcAgentServerV2::new("mqtt-gateway", Box::new(agent));
         server.run(addr).await?;
     } else {
-        // UDS transport (v1 compatible)
+        // UDS transport (v2 protocol)
         info!(
             version = env!("CARGO_PKG_VERSION"),
-            protocol = "v1",
+            protocol = "v2",
             transport = "uds",
             socket = %args.socket.display(),
             "Starting MQTT Gateway Agent"
         );
 
-        let server = AgentServer::new(
+        let server = UdsAgentServerV2::new(
             "mqtt-gateway",
             args.socket,
             Box::new(agent),
