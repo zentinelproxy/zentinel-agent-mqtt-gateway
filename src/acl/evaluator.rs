@@ -36,7 +36,7 @@ impl AclEvaluator {
         }
 
         // Sort by priority (highest first)
-        rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        rules.sort_by_key(|b| std::cmp::Reverse(b.priority));
 
         Ok(Self {
             rules: Arc::new(RwLock::new(rules)),
@@ -60,7 +60,7 @@ impl AclEvaluator {
         }
 
         // Sort by priority (highest first)
-        new_rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        new_rules.sort_by_key(|b| std::cmp::Reverse(b.priority));
 
         *self.rules.write() = new_rules;
         *self.default_action.write() = config.default_action;
@@ -83,7 +83,7 @@ impl AclEvaluator {
         }
 
         // Re-sort by priority
-        current.sort_by(|a, b| b.priority.cmp(&a.priority));
+        current.sort_by_key(|b| std::cmp::Reverse(b.priority));
 
         Ok(())
     }
