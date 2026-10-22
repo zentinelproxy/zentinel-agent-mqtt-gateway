@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 /// MQTT Gateway Agent Configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct MqttGatewayConfig {
     /// Authentication configuration
     pub auth: AuthConfig,
@@ -38,7 +38,7 @@ pub struct MqttGatewayConfig {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct AuthConfig {
     /// Enable authentication
     pub enabled: bool,
@@ -48,6 +48,7 @@ pub struct AuthConfig {
 
     /// Authentication providers (evaluated in order)
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub providers: Vec<AuthProvider>,
 
     /// Client ID validation regex pattern
@@ -63,7 +64,7 @@ pub struct AuthConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
+#[serde(rename_all = "snake_case", tag = "type", deny_unknown_fields)]
 pub enum AuthProvider {
     /// Static username/password file (YAML or JSON)
     File {
@@ -120,7 +121,7 @@ pub enum CertificateField {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct AclConfig {
     /// Enable ACL enforcement
     pub enabled: bool,
@@ -130,6 +131,7 @@ pub struct AclConfig {
 
     /// ACL rules (evaluated in order, first match wins)
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub rules: Vec<AclRule>,
 
     /// Load additional rules from file
@@ -153,7 +155,7 @@ impl Default for AclConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct AclRule {
     /// Rule name (for logging and debugging)
     pub name: String,
@@ -163,10 +165,12 @@ pub struct AclRule {
     pub match_conditions: AclMatch,
 
     /// Topic patterns this rule applies to
+    #[serde(deserialize_with = "one_or_many")]
     pub topics: Vec<String>,
 
     /// Actions this rule applies to (empty = all actions)
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub actions: Vec<MqttAction>,
 
     /// Decision: allow or deny
@@ -181,7 +185,7 @@ pub struct AclRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct AclMatch {
     /// Match by exact username
     pub username: Option<String>,
@@ -194,6 +198,7 @@ pub struct AclMatch {
     /// Match by client IP (CIDR notation supported)
     pub client_ip: Option<String>,
     /// Match if user belongs to any of these groups
+    #[serde(default, deserialize_with = "opt_one_or_many")]
     pub groups: Option<Vec<String>>,
     /// Match by protocol version (3, 4, or 5)
     pub protocol_version: Option<u8>,
@@ -221,7 +226,7 @@ pub enum MqttAction {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct InspectionConfig {
     /// Enable payload inspection
     pub enabled: bool,
@@ -242,11 +247,12 @@ pub struct InspectionConfig {
 
     /// Topics to exclude from inspection (glob patterns)
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub exclude_topics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct PatternConfig {
     /// Enable SQL injection detection
     pub sqli: bool,
@@ -258,11 +264,12 @@ pub struct PatternConfig {
     pub path_traversal: bool,
     /// Custom regex patterns to block
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub custom_patterns: Vec<CustomPattern>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CustomPattern {
     /// Pattern name for logging
     pub name: String,
@@ -284,11 +291,12 @@ pub enum Severity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct JsonSchemaConfig {
     /// Path to JSON schema file
     pub schema_file: PathBuf,
     /// Topics to validate (glob patterns)
+    #[serde(deserialize_with = "one_or_many")]
     pub topics: Vec<String>,
     /// Block on validation failure (vs. log only)
     #[serde(default = "default_true")]
@@ -300,7 +308,7 @@ pub struct JsonSchemaConfig {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct RateLimitConfig {
     /// Enable rate limiting
     pub enabled: bool,
@@ -313,6 +321,7 @@ pub struct RateLimitConfig {
 
     /// Per-topic rate limits
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub per_topic: Vec<TopicRateLimit>,
 
     /// Rate limit key extraction (what identifies a client)
@@ -320,7 +329,7 @@ pub struct RateLimitConfig {
     pub key_by: RateLimitKey,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RateLimitKey {
     #[default]
@@ -329,8 +338,8 @@ pub enum RateLimitKey {
     ClientIp,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct RateLimit {
     /// Maximum messages per second
     pub messages_per_second: u32,
@@ -342,8 +351,8 @@ pub struct RateLimit {
     pub burst: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TopicRateLimit {
     /// Topic pattern (glob)
     pub topic: String,
@@ -356,7 +365,7 @@ pub struct TopicRateLimit {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct QosConfig {
     /// Enable QoS enforcement
     pub enabled: bool,
@@ -369,6 +378,7 @@ pub struct QosConfig {
 
     /// Per-topic QoS limits
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub per_topic: Vec<TopicQosLimit>,
 }
 
@@ -384,7 +394,7 @@ impl Default for QosConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TopicQosLimit {
     /// Topic pattern
     pub topic: String,
@@ -397,7 +407,7 @@ pub struct TopicQosLimit {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct RetainedConfig {
     /// Enable retained message control
     pub enabled: bool,
@@ -407,10 +417,12 @@ pub struct RetainedConfig {
 
     /// Topics where retained messages are allowed (glob patterns)
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub allowed_topics: Vec<String>,
 
     /// Topics where retained messages are blocked (glob patterns)
     #[serde(default)]
+    #[serde(deserialize_with = "one_or_many")]
     pub blocked_topics: Vec<String>,
 
     /// Maximum retained message size (bytes)
@@ -434,7 +446,7 @@ impl Default for RetainedConfig {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct GeneralConfig {
     /// Block mode: block violations (true) or detect-only (false)
     pub block_mode: bool,
@@ -447,6 +459,7 @@ pub struct GeneralConfig {
 
     /// Supported MQTT protocol versions
     #[serde(default = "default_protocol_versions")]
+    #[serde(deserialize_with = "one_or_many")]
     pub protocol_versions: Vec<MqttVersion>,
 
     /// Maximum connections per client IP
@@ -499,6 +512,142 @@ pub struct ConnectionContext {
     pub groups: Vec<String>,
     /// Custom attributes from auth provider
     pub attributes: HashMap<String, String>,
+}
+
+// ============================================================================
+// Applying a configuration on top of the running one
+// ============================================================================
+
+/// Accept a list as an array or as a single value. A one-argument KDL node
+/// (`topics "sensors/#"`) reaches the agent as a scalar, not an array.
+fn one_or_many<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany<T> {
+        Many(Vec<T>),
+        One(T),
+    }
+    Ok(match OneOrMany::<T>::deserialize(deserializer)? {
+        OneOrMany::Many(v) => v,
+        OneOrMany::One(v) => vec![v],
+    })
+}
+
+fn opt_one_or_many<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany<T> {
+        Many(Vec<T>),
+        One(T),
+    }
+    Ok(match Option::<OneOrMany<T>>::deserialize(deserializer)? {
+        None => None,
+        Some(OneOrMany::Many(v)) => Some(v),
+        Some(OneOrMany::One(v)) => Some(vec![v]),
+    })
+}
+
+/// Overlay `patch` onto `base`: objects merge key by key, anything else
+/// (scalars, arrays, null) replaces the value at that key.
+fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(patch)) => {
+            for (key, value) in patch {
+                match base.get_mut(key) {
+                    Some(existing) if existing.is_object() && value.is_object() => {
+                        merge_json(existing, value)
+                    }
+                    _ => {
+                        base.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (base, patch) => *base = patch.clone(),
+    }
+}
+
+/// Dotted paths of every leaf that differs between `old` and `new`.
+fn diff_paths(
+    prefix: &str,
+    old: &serde_json::Value,
+    new: &serde_json::Value,
+    out: &mut Vec<String>,
+) {
+    match (old, new) {
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+            let mut keys: Vec<&String> = a.keys().chain(b.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for key in keys {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                match (a.get(key), b.get(key)) {
+                    (Some(x), Some(y)) => diff_paths(&path, x, y, out),
+                    _ => out.push(path),
+                }
+            }
+        }
+        (a, b) if a != b => out.push(prefix.to_string()),
+        _ => {}
+    }
+}
+
+impl MqttGatewayConfig {
+    /// The configuration that results from applying `patch` (a JSON
+    /// document from the `--config` file or from the proxy's `config { }`
+    /// block) on top of `self`, and the dotted names of the settings that
+    /// changed.
+    ///
+    /// - Keys absent from `patch` keep their current value; objects merge,
+    ///   other values (including lists) replace.
+    /// - Unknown or misspelled keys are an error, never ignored.
+    /// - Authentication fails closed: an `auth` object that lists providers
+    ///   but does not say `enabled` turns authentication on. Only an explicit
+    ///   `"enabled": false` turns it off.
+    pub fn merged(&self, patch: &serde_json::Value) -> Result<(Self, Vec<String>), String> {
+        if !patch.is_object() {
+            return Err("configuration must be a JSON object".to_string());
+        }
+        let current = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        let mut next = current.clone();
+        merge_json(&mut next, patch);
+
+        if let Some(auth) = patch.get("auth").and_then(|a| a.as_object()) {
+            let lists_providers = match auth.get("providers") {
+                Some(serde_json::Value::Array(p)) => !p.is_empty(),
+                Some(serde_json::Value::Object(_)) => true,
+                _ => false,
+            };
+            if lists_providers && !auth.contains_key("enabled") {
+                next["auth"]["enabled"] = serde_json::Value::Bool(true);
+            }
+        }
+
+        let config: Self = serde_json::from_value(next).map_err(|e| e.to_string())?;
+        // Diff the round-tripped value so defaults filled in by serde count.
+        let new_value = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+        let mut changed = Vec::new();
+        diff_paths("", &current, &new_value, &mut changed);
+        Ok((config, changed))
+    }
+
+    /// Load a `--config` file's JSON on top of the built-in defaults, with
+    /// the same rules as [`MqttGatewayConfig::merged`].
+    pub fn from_json(value: &serde_json::Value) -> Result<Self, String> {
+        Self::default().merged(value).map(|(config, _)| config)
+    }
 }
 
 // ============================================================================

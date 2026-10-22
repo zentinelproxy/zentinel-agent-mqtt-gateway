@@ -147,17 +147,32 @@ impl RateLimiter {
         }
     }
 
-    /// Reconfigure rate limiter
+    /// Reconfigure rate limiter.
+    ///
+    /// Buckets whose limit did not change keep their state, so an unchanged
+    /// (or unrelated) reconfigure does not hand every client a full bucket:
+    /// the global bucket is rebuilt only when `global` changes, per-client
+    /// buckets only when `per-client` or `key-by` change, and a per-topic
+    /// bucket only when its own entry changes.
     pub fn reconfigure(&self, config: &RateLimitConfig) {
-        *self.config.write() = config.clone();
+        let mut current = self.config.write();
 
-        // Update global limiter
-        let new_global = config.global.as_ref().map(create_limiter_pair);
-        *self.global_limiter.write() = new_global;
+        if current.global != config.global {
+            *self.global_limiter.write() = config.global.as_ref().map(create_limiter_pair);
+        }
 
-        // Clear per-client limiters (they'll be recreated on demand)
-        self.client_limiters.clear();
-        self.topic_limiters.clear();
+        if current.per_client != config.per_client || current.key_by != config.key_by {
+            self.client_limiters.clear();
+        }
+
+        let old_topics = current.per_topic.clone();
+        self.topic_limiters.retain(|pattern, _| {
+            let old = old_topics.iter().find(|t| &t.topic == pattern);
+            let new = config.per_topic.iter().find(|t| &t.topic == pattern);
+            matches!((old, new), (Some(o), Some(n)) if o == n)
+        });
+
+        *current = config.clone();
     }
 
     /// Clean up expired limiters (call periodically)

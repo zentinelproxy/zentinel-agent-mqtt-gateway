@@ -63,7 +63,10 @@ async fn main() -> Result<()> {
     let config = if let Some(config_path) = &args.config {
         info!(path = %config_path.display(), "Loading configuration from file");
         let content = std::fs::read_to_string(config_path)?;
-        serde_json::from_str(&content)?
+        let value: serde_json::Value = serde_json::from_str(&content)?;
+        MqttGatewayConfig::from_json(&value).map_err(|e| {
+            anyhow::anyhow!("invalid configuration in {}: {e}", config_path.display())
+        })?
     } else {
         MqttGatewayConfig::default()
     };

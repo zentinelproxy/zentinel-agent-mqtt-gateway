@@ -140,10 +140,51 @@ Command-line flags (none read environment variables):
 | `--log-level <LEVEL>` | `info` | Log level; `RUST_LOG` takes precedence |
 | `--json-logs` | off | Log as JSON |
 
-The JSON file is the way to configure the agent: an agent block's `config { }`
-in the proxy's KDL is not forwarded to the agent by the current proxy.
-Top-level keys and their fields are kebab-case; fields inside an auth
-`providers` entry are snake_case.
+The agent reads its settings from the JSON file and, from the Zentinel
+release that includes zentinelproxy/zentinel#603, from the agent block's
+`config { }` in the proxy's KDL, which uses the same keys. Top-level keys and
+their fields are kebab-case; fields inside an auth `providers` entry are
+snake_case. A list may be given as a single value (`allowed-topics "config/#"`
+in KDL arrives as one string).
+
+The proxy sends the `config { }` block on every connection it opens to the
+agent (each pooled connection at startup and every reconnect). The agent
+applies both the file and the block under one rule:
+
+- **Idempotent.** A block identical to the one already accepted (same
+  canonical hash, key order ignored), or one that changes no setting, does
+  nothing. When settings change, only the affected components are rebuilt:
+  rate-limit buckets are kept unless their own limit changed, and
+  authenticated connections are never dropped by a configure.
+- **Merge, don't replace.** The block overlays the running configuration
+  (the file, or the built-in defaults): objects merge key by key, a key that
+  is absent keeps its current value, and a list that is given replaces the
+  whole list.
+- **Reject what can't be applied.** An unknown or misspelled key at any level,
+  a value of the wrong type, an invalid regex, or an unreadable schema file
+  makes the agent refuse the configuration (the proxy then does not use that
+  connection), and the agent keeps running with what it had. A file with such
+  a key fails at startup.
+- **Authentication fails closed.** Leaving `auth` out never turns
+  authentication off, and an `auth` section that lists `providers` without
+  saying `enabled` turns it on. Only an explicit `enabled false` turns it off,
+  and the agent logs a warning when that happens.
+- **No secrets in logs.** The agent logs the block's hash and the names of
+  the settings that changed, never the block itself.
+
+```kdl
+agent "mqtt-gateway" type="custom" {
+    unix-socket "/var/run/zentinel/mqtt-gateway.sock"
+    events "websocket_frame"
+    config {
+        rate-limit {
+            enabled #true
+            per-client messages-per-second=100 burst=50
+        }
+        retained enabled=#true allow-retained=#false allowed-topics="config/#"
+    }
+}
+```
 
 ```json
 {
@@ -208,7 +249,7 @@ The user file for the `file` provider is JSON (other extensions fail to load):
 
 | Option | Default | Meaning |
 |---|---|---|
-| `auth.enabled` | `false` | Authenticate `CONNECT`; when off every client is accepted |
+| `auth.enabled` | `false`, or `true` when `auth.providers` is set | Authenticate `CONNECT`; when off every client is accepted |
 | `auth.allow-anonymous` | `false` | Accept `CONNECT` without username and password |
 | `auth.providers` | `[]` | Tried in order. `file` (`path`, `hot_reload`): bcrypt users with groups. `jwt` (`secret`, `issuer`, `audience`, `username_claim` = `sub`): HS256 token in the password field. `http` and `certificate` are accepted but not implemented, and `jwks_url` is not read |
 | `auth.client-id-pattern` | none | Regex the client ID must match |
