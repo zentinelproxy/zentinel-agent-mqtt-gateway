@@ -14,7 +14,7 @@ use zentinel_agent_protocol::v2::{GrpcAgentServerV2, UdsAgentServerV2};
 
 /// MQTT Gateway Agent for Zentinel
 #[derive(Parser, Debug)]
-#[command(name = "zentinel-mqtt-agent")]
+#[command(name = "zentinel-mqtt-gateway-agent")]
 #[command(author = "Zentinel Contributors")]
 #[command(version)]
 #[command(about = "MQTT Gateway security agent for Zentinel proxy (Protocol v2)", long_about = None)]

@@ -134,11 +134,12 @@ Command-line flags (none read environment variables):
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-s, --socket <PATH>` | `/tmp/zentinel-mqtt-agent.sock` | Unix socket to listen on |
-| `--grpc-address <ADDR>` | none | Serve gRPC on this address instead of the socket |
+| `-s, --socket <PATH>` | `/tmp/zentinel-mqtt-agent.sock` | Unix socket to listen on (agent protocol v2) |
+| `--grpc-address <ADDR>` | none | Serve gRPC (agent protocol v2) on this address instead of the socket |
 | `-c, --config <PATH>` | built-in defaults | JSON configuration file |
 | `--log-level <LEVEL>` | `info` | Log level; `RUST_LOG` takes precedence |
 | `--json-logs` | off | Log as JSON |
+| `--version` | | Print `zentinel-mqtt-gateway-agent <version>` and exit |
 
 The agent reads its settings from the JSON file and, from the Zentinel
 release that includes zentinelproxy/zentinel#603, from the agent block's
@@ -303,6 +304,23 @@ does not parse is dropped, so MQTT 5.0 clients do not work through the agent.
 `PUBLISH` or `SUBSCRIBE` before a successful `CONNECT` on the same connection
 closes it. The agent exports v2 metrics for requests, blocks, auth failures,
 ACL denials, rate-limit hits and inspection blocks.
+
+## Releases and smoke test
+
+Releases are built from their tag by the shared pipeline in
+[`zentinelproxy/.github`](https://github.com/zentinelproxy/.github)
+(`agent-release.yml`): each platform's binary is run behind a real Zentinel
+by [`scripts/smoke-test.sh`](scripts/smoke-test.sh) before anything is
+published, and CI runs the same smoke job on every push. Over the Unix socket
+and over gRPC, fail-closed, it checks the v2 handshake, that plain HTTP
+requests are forwarded, and that with the agent stopped requests are
+refused. The harness speaks plain HTTP only, so the MQTT packet checks (ACLs, payload inspection, QoS, retained messages) are covered by
+`cargo test`, not by the smoke test. Locally:
+
+```bash
+AGENT_SMOKE=../.github/agent-smoke/smoke.py \
+  scripts/smoke-test.sh target/release/zentinel-mqtt-gateway-agent ./zentinel
+```
 
 ## Development
 
