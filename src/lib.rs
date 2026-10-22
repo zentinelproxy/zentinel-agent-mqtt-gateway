@@ -46,6 +46,7 @@ pub mod acl;
 pub mod agent;
 pub mod auth;
 pub mod config;
+pub mod fingerprint;
 pub mod inspection;
 pub mod mqtt;
 pub mod qos;

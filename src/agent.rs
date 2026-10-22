@@ -14,9 +14,11 @@ use crate::retained::RetainedController;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use dashmap::DashMap;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+use crate::fingerprint::config_fingerprint;
 use tracing::{debug, info, warn};
 use zentinel_agent_protocol::v2::{
     AgentCapabilities, AgentFeatures, AgentHandlerV2, AgentLimits, DrainReason, HealthConfig,
@@ -58,6 +60,9 @@ pub struct MqttGatewayAgent {
     inspection_blocks: AtomicU64,
     /// Configuration version
     config_version: Arc<RwLock<Option<String>>>,
+    /// Canonical hash of the last configuration accepted from the proxy.
+    /// The mutex also serialises configures arriving on several connections.
+    config_hash: Mutex<Option<u64>>,
 }
 
 impl MqttGatewayAgent {
@@ -91,23 +96,90 @@ impl MqttGatewayAgent {
             rate_limit_hits: AtomicU64::new(0),
             inspection_blocks: AtomicU64::new(0),
             config_version: Arc::new(RwLock::new(None)),
+            config_hash: Mutex::new(None),
         })
     }
 
-    /// Reconfigure the agent
+    /// Reconfigure the agent with a complete configuration.
+    ///
+    /// Only the components whose section changed are rebuilt, so runtime
+    /// state (rate-limit buckets, authenticated connections, compiled
+    /// patterns) survives a reconfigure that leaves its settings alone.
+    /// Everything that can fail is built before anything is replaced, so an
+    /// error leaves the agent exactly as it was.
     pub fn reconfigure(&self, config: MqttGatewayConfig) -> Result<()> {
-        // Update components
-        self.authenticator.write().reconfigure(&config.auth)?;
-        self.acl
-            .reconfigure(&config.acl)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        self.rate_limiter.reconfigure(&config.rate_limit);
-        self.inspector.write().reconfigure(&config.inspection)?;
-        self.qos_enforcer.reconfigure(&config.qos);
-        self.retained_controller.reconfigure(&config.retained);
+        let current = serde_json::to_value(&*self.config.read())?;
+        let next = serde_json::to_value(&config)?;
+        let changed: Vec<&str> = ["auth", "acl", "inspection", "rate-limit", "qos", "retained"]
+            .into_iter()
+            .filter(|section| current.get(*section) != next.get(*section))
+            .collect();
+        let has = |section: &str| changed.contains(&section);
+
+        let authenticator = if has("auth") {
+            Some(Authenticator::new(&config.auth)?)
+        } else {
+            None
+        };
+        if has("acl") {
+            // Compile the rules once to validate them before swapping.
+            AclEvaluator::new(&config.acl).map_err(|e| anyhow::anyhow!("{}", e))?;
+        }
+        let inspector = if has("inspection") {
+            Some(PayloadInspector::new(&config.inspection)?)
+        } else {
+            None
+        };
+
+        if let Some(authenticator) = authenticator {
+            *self.authenticator.write() = authenticator;
+        }
+        if has("acl") {
+            self.acl
+                .reconfigure(&config.acl)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+        }
+        if has("rate-limit") {
+            self.rate_limiter.reconfigure(&config.rate_limit);
+        }
+        if let Some(inspector) = inspector {
+            *self.inspector.write() = inspector;
+        }
+        if has("qos") {
+            self.qos_enforcer.reconfigure(&config.qos);
+        }
+        if has("retained") {
+            self.retained_controller.reconfigure(&config.retained);
+        }
 
         *self.config.write() = config;
         Ok(())
+    }
+
+    /// Apply a configuration received from the proxy. See
+    /// [`AgentHandlerV2::on_configure`] for the rules.
+    ///
+    /// Returns the names of the settings that changed.
+    pub fn apply_proxy_config(&self, raw: &serde_json::Value) -> Result<Vec<String>> {
+        let hash = config_fingerprint(raw);
+        let mut last = self.config_hash.lock();
+        if *last == Some(hash) {
+            return Ok(Vec::new());
+        }
+        let (next, changed) = self
+            .config
+            .read()
+            .merged(raw)
+            .map_err(|e| anyhow::anyhow!("invalid configuration: {e}"))?;
+        if !changed.is_empty() {
+            let auth_was_on = self.config.read().auth.enabled;
+            if auth_was_on && !next.auth.enabled {
+                warn!("Configuration turns MQTT authentication off (auth.enabled false)");
+            }
+            self.reconfigure(next)?;
+        }
+        *last = Some(hash);
+        Ok(changed)
     }
 
     /// Process an MQTT packet from a WebSocket frame
@@ -514,24 +586,35 @@ impl AgentHandlerV2 for MqttGatewayAgent {
     }
 
     /// Handle configuration updates from the proxy
+    /// The proxy sends the agent's `config { }` block on every connection
+    /// (each pooled connection, and every reconnect), so this is idempotent:
+    /// a block identical to the last one accepted, or one that changes no
+    /// setting, leaves all state alone. The block overlays the running
+    /// configuration (absent keys keep their value); unknown keys are
+    /// rejected. The configuration itself is never logged, since it may hold
+    /// secrets (JWT secrets, provider headers); its hash and the changed
+    /// setting names are.
     async fn on_configure(&self, config: serde_json::Value, version: Option<String>) -> bool {
-        info!(version = ?version, "Received configuration update");
-
-        match serde_json::from_value::<MqttGatewayConfig>(config) {
-            Ok(new_config) => {
-                if let Err(e) = self.reconfigure(new_config) {
-                    warn!(error = %e, "Failed to apply configuration");
-                    return false;
+        let hash = format!("{:016x}", config_fingerprint(&config));
+        match self.apply_proxy_config(&config) {
+            Ok(changed) => {
+                if changed.is_empty() {
+                    debug!(version = ?version, config_hash = %hash, "Configuration unchanged");
+                } else {
+                    info!(
+                        version = ?version,
+                        config_hash = %hash,
+                        changed = ?changed,
+                        "Configuration applied"
+                    );
                 }
-                // Store the version
                 if let Some(v) = version {
                     *self.config_version.write() = Some(v);
                 }
-                info!("Configuration applied successfully");
                 true
             }
             Err(e) => {
-                warn!(error = %e, "Failed to parse configuration");
+                warn!(version = ?version, config_hash = %hash, error = %e, "Configuration rejected");
                 false
             }
         }
@@ -657,5 +740,180 @@ impl AgentHandlerV2 for MqttGatewayAgent {
         );
         // In drain mode, we continue processing existing connections
         // but the proxy will stop sending new ones
+    }
+}
+
+#[cfg(test)]
+mod configure_tests {
+    use super::*;
+    use crate::config::{RateLimit, RateLimitConfig};
+    use serde_json::json;
+
+    fn client() -> ConnectionContext {
+        ConnectionContext {
+            client_id: "sensor-1".to_string(),
+            client_ip: "127.0.0.1".to_string(),
+            protocol_version: 4,
+            ..Default::default()
+        }
+    }
+
+    fn limited_agent() -> MqttGatewayAgent {
+        let config = MqttGatewayConfig {
+            rate_limit: RateLimitConfig {
+                enabled: true,
+                per_client: Some(RateLimit {
+                    messages_per_second: 1,
+                    bytes_per_second: 0,
+                    burst: 3,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        MqttGatewayAgent::with_config(config).unwrap()
+    }
+
+    fn allowed(agent: &MqttGatewayAgent) -> bool {
+        agent
+            .rate_limiter
+            .check_message(&client(), "sensors/1/data", 10)
+            .allowed
+    }
+
+    #[tokio::test]
+    async fn identical_configure_keeps_rate_limit_buckets() {
+        let agent = limited_agent();
+        let block = json!({
+            "rate-limit": {
+                "enabled": true,
+                "per-client": {"messages-per-second": 1, "burst": 3}
+            }
+        });
+        assert!(agent.on_configure(block.clone(), None).await);
+        for _ in 0..3 {
+            assert!(allowed(&agent));
+        }
+        // Another pooled connection, or a reconnect, sends the same block.
+        assert!(agent.on_configure(block.clone(), None).await);
+        assert!(
+            !allowed(&agent),
+            "a repeated configure must not refill the bucket"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_change_keeps_rate_limit_buckets() {
+        let agent = limited_agent();
+        for _ in 0..3 {
+            assert!(allowed(&agent));
+        }
+        assert!(
+            agent
+                .on_configure(json!({"qos": {"max-qos": 1}}), None)
+                .await
+        );
+        assert!(!allowed(&agent));
+        // Changing the limit itself does rebuild the per-client buckets.
+        let raised = json!({"rate-limit": {"per-client": {"messages-per-second": 1, "burst": 5}}});
+        assert!(agent.on_configure(raised, None).await);
+        assert!(allowed(&agent));
+    }
+
+    fn file_config() -> MqttGatewayConfig {
+        MqttGatewayConfig::from_json(&json!({
+            "auth": {
+                "enabled": true,
+                "providers": [{"type": "jwt", "secret": "file-secret"}]
+            },
+            "acl": {
+                "default-action": "allow",
+                "rules": [{"name": "deny-sys", "topics": ["$SYS/#"], "decision": "deny"}]
+            },
+            "inspection": {"enabled": true, "patterns": {"sqli": true}}
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn partial_configure_keeps_file_values() {
+        let agent = MqttGatewayAgent::with_config(file_config()).unwrap();
+        // A block that does not mention auth, acl or inspection.
+        assert!(
+            agent
+                .on_configure(json!({"qos": {"enabled": true, "max-qos": 1}}), None)
+                .await
+        );
+        {
+            let config = agent.config.read();
+            assert!(config.auth.enabled, "omitting auth must not turn it off");
+            assert_eq!(config.auth.providers.len(), 1);
+            assert_eq!(config.acl.rules.len(), 1);
+            assert!(config.inspection.enabled);
+            assert!(config.inspection.patterns.sqli);
+            assert!(config.qos.enabled);
+            assert_eq!(config.qos.max_qos, 1);
+        }
+        // Nested merge: one field of a section leaves its siblings alone.
+        assert!(
+            agent
+                .on_configure(json!({"auth": {"allow-anonymous": true}}), None)
+                .await
+        );
+        let config = agent.config.read();
+        assert!(config.auth.enabled);
+        assert!(config.auth.allow_anonymous);
+        assert_eq!(config.auth.providers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn providers_without_enabled_turn_auth_on() {
+        let agent = MqttGatewayAgent::new().unwrap();
+        assert!(!agent.config.read().auth.enabled);
+        // What a KDL `auth { providers { type "jwt"; secret "s" } }` sends.
+        let block = json!({"auth": {"providers": {"type": "jwt", "secret": "s"}}});
+        assert!(agent.on_configure(block, None).await);
+        assert!(agent.config.read().auth.enabled);
+        assert_eq!(agent.config.read().auth.providers.len(), 1);
+        // Only an explicit false turns it off.
+        assert!(
+            agent
+                .on_configure(json!({"auth": {"enabled": false}}), None)
+                .await
+        );
+        assert!(!agent.config.read().auth.enabled);
+    }
+
+    #[tokio::test]
+    async fn unknown_keys_are_rejected_and_nothing_changes() {
+        let agent = MqttGatewayAgent::with_config(file_config()).unwrap();
+        for bad in [
+            json!({"auht": {"enabled": false}}),
+            json!({"auth": {"enable": false}}),
+            json!({"rate-limit": {"per-clinet": {"messages-per-second": 1}}}),
+            json!({"auth": {"providers": [{"type": "jwt", "secrte": "x"}]}}),
+            json!({"acl": {"rules": [{"name": "r", "topics": "a/#", "decision": "allow", "prio": 1}]}}),
+            json!([1, 2]),
+        ] {
+            assert!(
+                !agent.on_configure(bad.clone(), None).await,
+                "{bad} accepted"
+            );
+        }
+        let config = agent.config.read();
+        assert!(config.auth.enabled);
+        assert_eq!(config.acl.rules.len(), 1);
+        assert_eq!(config.acl.rules[0].name, "deny-sys");
+    }
+
+    #[tokio::test]
+    async fn single_value_lists_from_kdl() {
+        let agent = MqttGatewayAgent::new().unwrap();
+        let block = json!({"retained": {"enabled": true, "allowed-topics": "config/#"}});
+        assert!(agent.on_configure(block, None).await);
+        assert_eq!(
+            agent.config.read().retained.allowed_topics,
+            vec!["config/#".to_string()]
+        );
     }
 }
